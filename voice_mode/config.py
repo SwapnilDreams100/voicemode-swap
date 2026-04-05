@@ -658,6 +658,10 @@ SOUNDFONTS_ENABLED = env_bool("VOICEMODE_SOUNDFONTS_ENABLED", True)
 SAMPLE_RATE = 24000  # Standard TTS sample rate for both OpenAI and Kokoro
 CHANNELS = 1
 
+# Input device index (None = use system default)
+_input_device_env = os.getenv("VOICEMODE_INPUT_DEVICE_INDEX", "")
+INPUT_DEVICE_INDEX = int(_input_device_env) if _input_device_env.strip() else None
+
 # ==================== SILENCE DETECTION CONFIGURATION ====================
 
 # Disable silence detection (useful for noisy environments)

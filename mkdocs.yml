@@ -95,6 +95,7 @@ nav:
   - Local Services:
     - Whisper STT: guides/whisper-setup.md
     - Kokoro TTS: guides/kokoro-setup.md
+    - Universal Dictation (macOS): guides/universal-dictation-setup.md
   - Reference:
     - CLI Commands: reference/cli.md
     - Service Commands: reference/cli/service-commands.md

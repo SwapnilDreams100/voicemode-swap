@@ -24,6 +24,11 @@ WHISPER_URL = "http://localhost:2022/v1/audio/transcriptions"
 LOG_FILE = Path.home() / ".claude/plugins/claude-stt/voicemode_hotkey.log"
 HOLD_DELAY = 1.0  # seconds to hold cmd before recording starts
 
+# Audio input device index for avfoundation (run `ffmpeg -f avfoundation -list_devices true -i ""` to list)
+# Set explicitly so the daemon always uses the built-in mic regardless of system default input.
+# This means your headphones/earphones remain the default for calls/music.
+AUDIO_DEVICE_INDEX = "2"  # MacBook Pro Microphone
+
 # Sound feedback
 SOUND_START = "/System/Library/Sounds/Tink.aiff"
 SOUND_END = "/System/Library/Sounds/Pop.aiff"
@@ -72,9 +77,9 @@ def _start_recording():
 
     _ffmpeg_proc = subprocess.Popen(
         [
-            "ffmpeg", "-y",
+            "/opt/homebrew/bin/ffmpeg", "-y",
             "-f", "avfoundation",
-            "-i", ":0",          # default mic
+            "-i", f":{AUDIO_DEVICE_INDEX}",
             "-ar", "16000",
             "-ac", "1",
             "-c:a", "pcm_s16le",

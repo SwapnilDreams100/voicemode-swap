@@ -63,7 +63,8 @@ from voice_mode.config import (
     MP3_BITRATE,
     CONCH_ENABLED,
     CONCH_TIMEOUT,
-    CONCH_CHECK_INTERVAL
+    CONCH_CHECK_INTERVAL,
+    INPUT_DEVICE_INDEX
 )
 import voice_mode.config
 from voice_mode.provider_discovery import provider_registry
@@ -704,7 +705,8 @@ def record_audio(duration: float) -> np.ndarray:
             samples_to_record,
             samplerate=SAMPLE_RATE,
             channels=CHANNELS,
-            dtype=np.int16
+            dtype=np.int16,
+            device=INPUT_DEVICE_INDEX
         )
         sd.wait()
         
@@ -893,7 +895,8 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                                channels=CHANNELS,
                                dtype=np.int16,
                                callback=audio_callback,
-                               blocksize=chunk_samples):
+                               blocksize=chunk_samples,
+                               device=INPUT_DEVICE_INDEX):
                 
                 logger.debug("Started continuous audio stream")
                 
