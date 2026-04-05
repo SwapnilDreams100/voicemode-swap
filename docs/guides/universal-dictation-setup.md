@@ -1,11 +1,17 @@
-# Universal Dictation Setup (macOS)
+# Universal Dictation & Claude Voice Setup (macOS)
 
-A guide to setting up voicemode-swap as a system-wide dictation tool on macOS. Hold `cmd` for 1 second anywhere — terminal, browser, editor, Slack — speak, release, and your words are typed into the active window.
+This repo provides two complementary voice capabilities that share the same Whisper STT backend:
 
-This combines two components:
+| | Universal Dictation | Claude Code Voice |
+|---|---|---|
+| **What it does** | Hold Cmd → speak anywhere → text typed into active window | Full two-way voice conversation with Claude Code |
+| **Input (STT)** | Whisper at `localhost:2022` | Whisper at `localhost:2022` |
+| **Output (TTS)** | None — dictation only | Kokoro at `localhost:8880` |
+| **How** | `voicemode_hotkey.py` daemon | voicemode MCP plugin for Claude Code |
 
-- **Whisper service** — local speech-to-text running at `localhost:2022`
-- **Hotkey daemon** (`voicemode_hotkey.py`) — listens for `cmd` hold, records via ffmpeg, transcribes via Whisper, injects text
+You can set up just dictation, just Claude voice, or both. Whisper is shared between them.
+
+---
 
 ## Prerequisites
 
@@ -13,49 +19,48 @@ This combines two components:
 - [Homebrew](https://brew.sh)
 - Python 3.10+
 
-## Step 1: Install system dependencies
-
 ```bash
 brew install ffmpeg uv
 ```
 
-Verify ffmpeg is at `/opt/homebrew/bin/ffmpeg`:
+Verify ffmpeg landed at `/opt/homebrew/bin/ffmpeg`:
 
 ```bash
 which ffmpeg
 # /opt/homebrew/bin/ffmpeg
 ```
 
-## Step 2: Clone and install voicemode-swap
+---
+
+## Part 1: Clone and install voicemode-swap
 
 ```bash
-git clone https://github.com/mbailey/voicemode /Users/your-name/voicemode-swap
-cd voicemode-swap
+git clone https://github.com/SwapnilDreams100/voicemode-swap ~/voicemode-swap
+cd ~/voicemode-swap
 uv tool install -e .
-```
-
-Verify:
-
-```bash
 voicemode --version
 ```
 
-## Step 3: Install the Whisper service
+---
+
+## Part 2: Whisper STT service (required for both)
+
+### Install
 
 ```bash
 voicemode service install whisper
 ```
 
-This downloads the `base` model (~150MB) and builds `whisper-server` with CoreML + Metal support for Apple Silicon.
+Downloads the `base` model (~150MB) and builds `whisper-server` with CoreML + Metal for Apple Silicon.
 
-Start it and confirm it's healthy:
+### Start and verify
 
 ```bash
 voicemode service start whisper
 voicemode service status whisper
 ```
 
-You should see:
+Expected output:
 
 ```
 ✅ Whisper is running locally
@@ -65,93 +70,102 @@ You should see:
    GPU: Metal
 ```
 
-## Step 4: Enable Whisper to auto-start at login
+Test it directly:
+
+```bash
+curl http://localhost:2022/health
+# {"status":"ok"}
+```
+
+### Enable auto-start at login
 
 ```bash
 voicemode service enable whisper
 ```
 
-This creates a launchd agent at `~/Library/LaunchAgents/com.voicemode.whisper.plist`.
-
-**Important:** The plist must include `/opt/homebrew/bin` in the PATH so that `whisper-server` can find `ffmpeg` when it runs as a background service (it won't inherit your shell's PATH). Verify it's there:
+This creates `~/Library/LaunchAgents/com.voicemode.whisper.plist`. Verify `/opt/homebrew/bin` is in the plist PATH (whisper-server calls ffmpeg internally and launchd doesn't inherit your shell PATH):
 
 ```bash
-grep -A5 "PATH" ~/Library/LaunchAgents/com.voicemode.whisper.plist
+grep -A5 PATH ~/Library/LaunchAgents/com.voicemode.whisper.plist
 ```
 
-You should see `/opt/homebrew/bin` in the PATH string. If not, edit it in:
+If `/opt/homebrew/bin` is missing, open and add it:
 
 ```bash
 open ~/Library/LaunchAgents/com.voicemode.whisper.plist
 ```
 
-## Step 5: Set up the hotkey daemon
+---
 
-The daemon lives at `scripts/voicemode_hotkey.py`. Install its Python dependencies:
+## Part 3: Universal dictation — hotkey daemon
+
+Hold `cmd` for 1 second anywhere (browser, Slack, editor, terminal), speak, release — your words are typed into the active window.
+
+### How it works
+
+`scripts/voicemode_hotkey.py` listens globally for `cmd` hold, records via ffmpeg using a hardcoded mic device (so your headphones stay as system default for calls), sends the WAV to Whisper, then pastes the transcript.
+
+### Install dependencies
 
 ```bash
 pip install pynput httpx
 ```
 
-**Critical:** The script calls `ffmpeg` by full path (`/opt/homebrew/bin/ffmpeg`). If you're starting fresh from this repo, verify line ~73 in `scripts/voicemode_hotkey.py` uses the full path:
+### Configure the input device
 
-```python
-"/opt/homebrew/bin/ffmpeg", "-y",
+The daemon hardcodes a specific avfoundation device so it always uses the built-in mic — your earphones/headphones remain the system default for everything else.
+
+List your devices:
+
+```bash
+ffmpeg -f avfoundation -list_devices true -i "" 2>&1 | grep -A20 "AVFoundation audio"
 ```
 
-Not just `"ffmpeg"` — this causes a `FileNotFoundError` when the daemon runs outside a login shell (e.g. launched at startup via launchd).
+Example output:
+```
+[0] Aggregate Device
+[1] JBL Endurance Race 2
+[2] MacBook Pro Microphone
+[3] ZoomAudioDevice
+```
 
-Copy the script to a permanent location (or leave it in the repo):
+Set `AUDIO_DEVICE_INDEX` near the top of `scripts/voicemode_hotkey.py` to match your built-in mic:
+
+```python
+AUDIO_DEVICE_INDEX = "2"  # MacBook Pro Microphone
+```
+
+Do **not** change your system default input device — that would affect calls, video meetings, etc.
+
+### Install the script
 
 ```bash
 mkdir -p ~/.claude/plugins/claude-stt
 cp scripts/voicemode_hotkey.py ~/.claude/plugins/claude-stt/voicemode_hotkey.py
 ```
 
-## Step 6: Grant Accessibility permission
+### Grant Accessibility permission
 
-The daemon needs macOS Accessibility access to inject keystrokes globally.
+The daemon needs Accessibility access to inject keystrokes globally.
 
-Go to: **System Settings → Privacy & Security → Accessibility**
+**System Settings → Privacy & Security → Accessibility** → add your terminal app and enable it.
 
-Add your terminal app (Terminal, iTerm2, Warp, etc.) and enable it.
+### Auto-start at login
 
-## Step 7: Auto-start the hotkey daemon at login
-
-Create a launchd plist:
+Use the template from this repo:
 
 ```bash
-cat > ~/Library/LaunchAgents/com.voicemode.hotkey.plist << 'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.voicemode.hotkey</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/bin/python3</string>
-        <string>/Users/YOUR_USERNAME/.claude/plugins/claude-stt/voicemode_hotkey.py</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>/Users/YOUR_USERNAME/.claude/plugins/claude-stt/voicemode_hotkey.log</string>
-    <key>StandardErrorPath</key>
-    <string>/Users/YOUR_USERNAME/.claude/plugins/claude-stt/voicemode_hotkey.log</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>PATH</key>
-        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
-    </dict>
-</dict>
-</plist>
-EOF
+sed "s/YOUR_USERNAME/$USER/g" scripts/launchd/com.voicemode.hotkey.plist \
+  > ~/Library/LaunchAgents/com.voicemode.hotkey.plist
 ```
 
-Replace `YOUR_USERNAME` with your actual username (`echo $USER`).
+Then update the python path in the plist to match yours:
+
+```bash
+which python3   # e.g. /Users/you/.pyenv/versions/3.11.10/bin/python3
+```
+
+Edit `~/Library/LaunchAgents/com.voicemode.hotkey.plist` and set that as the first `<string>` in `ProgramArguments`.
 
 Load it:
 
@@ -159,41 +173,15 @@ Load it:
 launchctl load ~/Library/LaunchAgents/com.voicemode.hotkey.plist
 ```
 
-## Step 8: Pin the input device
+### Verify dictation works
 
-The daemon uses ffmpeg's avfoundation to record. By default it would use whatever your system default input is — which macOS often resets to a Bluetooth headset after a reboot, breaking dictation while leaving your calls/music unaffected.
-
-The fix is to hardcode a specific device in the script so the daemon always uses the built-in mic, independent of your system default. Your earphones/headphones remain the default for everything else.
-
-First, list your avfoundation audio devices:
+Watch the log while you test:
 
 ```bash
-ffmpeg -f avfoundation -list_devices true -i "" 2>&1 | grep -A20 "AVFoundation audio"
-```
-
-Find your built-in mic (e.g. `[2] MacBook Pro Microphone`) and set `AUDIO_DEVICE_INDEX` near the top of `scripts/voicemode_hotkey.py`:
-
-```python
-AUDIO_DEVICE_INDEX = "2"  # MacBook Pro Microphone
-```
-
-Do **not** change your system default input — that would affect calls, video, etc.
-
-## Verify everything works
-
-```bash
-# Whisper healthy?
-curl http://localhost:2022/health
-# {"status":"ok"}
-
-# Daemon running?
-pgrep -la python | grep voicemode_hotkey
-
-# Watch the daemon log live
 tail -f ~/.claude/plugins/claude-stt/voicemode_hotkey.log
 ```
 
-Then hold `cmd` for 1 second, speak, release. You should see in the log:
+Hold `cmd` for 1 second, speak, release. You should see:
 
 ```
 🎤 Recording started...
@@ -202,52 +190,150 @@ Then hold `cmd` for 1 second, speak, release. You should see in the log:
 ✅ Text injected.
 ```
 
+---
+
+## Part 4: Claude Code voice — Kokoro TTS + voicemode MCP plugin
+
+This enables full two-way voice with Claude Code. Claude speaks back using Kokoro TTS; you speak to it using Whisper (same service as Part 2).
+
+### Install Kokoro TTS
+
+```bash
+voicemode service install kokoro
+voicemode service start kokoro
+voicemode service status kokoro
+```
+
+Expected:
+
+```
+✅ Kokoro is running locally
+   Port: 8880
+   Version: v0.2.4
+```
+
+### Enable Kokoro auto-start at login
+
+```bash
+voicemode service enable kokoro
+```
+
+This creates `~/Library/LaunchAgents/com.voicemode.kokoro.plist`.
+
+### Install the voicemode MCP plugin for Claude Code
+
+```bash
+claude mcp add --scope user voicemode -- uvx --refresh voice-mode
+```
+
+Or if running from this local repo:
+
+```bash
+claude mcp add --scope user voicemode -- uv run --directory ~/voicemode-swap voicemode
+```
+
+### Configure Claude Code permissions
+
+Add to `~/.claude/settings.json` so Claude can use voice tools without prompting every time:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "mcp__voicemode__converse",
+      "mcp__voicemode__service"
+    ]
+  }
+}
+```
+
+### Verify Claude voice works
+
+In Claude Code, say:
+
+```
+converse
+```
+
+You'll hear a chime, Claude will greet you, and you can speak back. Kokoro handles Claude's speech; Whisper handles yours.
+
+Check provider discovery to confirm both endpoints are registered:
+
+```bash
+voicemode diag registry
+```
+
+You should see Kokoro under TTS and Whisper under STT as `✅`.
+
+---
+
+## Full service status check
+
+```bash
+voicemode service status whisper    # STT — port 2022
+voicemode service status kokoro     # TTS — port 8880
+pgrep -la python | grep hotkey      # dictation daemon
+tail -5 ~/.claude/plugins/claude-stt/voicemode_hotkey.log
+```
+
+---
+
 ## Troubleshooting
 
-### "FileNotFoundError: ffmpeg" in the log
+### "FileNotFoundError: ffmpeg" in hotkey log
 
-The daemon can't find `ffmpeg` because it's running without Homebrew in PATH.
-
-Fix: make sure `scripts/voicemode_hotkey.py` uses the full path `/opt/homebrew/bin/ffmpeg` (not just `ffmpeg`), and that the launchd plist has `/opt/homebrew/bin` in its `EnvironmentVariables > PATH`.
+The daemon launched without Homebrew in PATH (common with launchd). The script must use the full path `/opt/homebrew/bin/ffmpeg`, not just `ffmpeg`. Check `scripts/voicemode_hotkey.py` line ~75.
 
 ### "Audio too short, skipping." every time
 
-ffmpeg failed silently (likely the same PATH issue above — it crashed before writing any audio).
+ffmpeg crashed silently — almost always the same PATH issue above.
 
 ### Whisper returns `{"error":"FFmpeg conversion failed."}`
 
-The whisper-server process can't find ffmpeg. Check the plist PATH includes `/opt/homebrew/bin`:
+The whisper-server itself can't find ffmpeg. Check the whisper launchd plist has `/opt/homebrew/bin` in PATH:
 
 ```bash
 grep -A5 PATH ~/Library/LaunchAgents/com.voicemode.whisper.plist
 ```
 
-Restart the service after fixing:
+Reload after fixing:
 
 ```bash
 launchctl unload ~/Library/LaunchAgents/com.voicemode.whisper.plist
 launchctl load ~/Library/LaunchAgents/com.voicemode.whisper.plist
 ```
 
-### Text is transcribed but nothing is typed
+### Dictation transcribes but nothing is typed
 
-Accessibility permission is missing. Go to **System Settings → Privacy & Security → Accessibility** and add your terminal.
+Accessibility permission missing. **System Settings → Privacy & Security → Accessibility** → add your terminal.
 
-### Wrong microphone / no audio captured
+### Wrong mic / empty transcriptions
 
-If the daemon records but transcription returns empty or gibberish, it may be reading from the wrong device. Check `AUDIO_DEVICE_INDEX` in `voicemode_hotkey.py` — run the device list command to confirm the index is still correct:
+Device indices can shift when you plug/unplug USB or Bluetooth audio. Re-list and update `AUDIO_DEVICE_INDEX`:
 
 ```bash
 ffmpeg -f avfoundation -list_devices true -i "" 2>&1 | grep -A20 "AVFoundation audio"
 ```
 
-Device indices can shift when you plug/unplug USB audio devices. Update `AUDIO_DEVICE_INDEX` if needed and restart the daemon.
-
-### Check service status at any time
+### Kokoro not speaking / Claude voice silent
 
 ```bash
-voicemode service status whisper
-voicemode service status kokoro    # if using local TTS
-pgrep -la python | grep hotkey
+voicemode service status kokoro
+curl http://localhost:8880/health
+voicemode diag registry
+```
+
+If Kokoro is down, restart it:
+
+```bash
+voicemode service restart kokoro
+```
+
+### Check all logs
+
+```bash
 tail -20 ~/.claude/plugins/claude-stt/voicemode_hotkey.log
+tail -20 ~/.voicemode/logs/whisper/whisper.err.log
+tail -20 ~/.voicemode/logs/kokoro/kokoro.err.log
+tail -20 ~/.voicemode/logs/events/voicemode_events_$(date +%Y-%m-%d).jsonl
 ```
