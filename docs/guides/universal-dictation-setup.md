@@ -20,14 +20,7 @@ You can set up just dictation, just Claude voice, or both. Whisper is shared bet
 - Python 3.10+
 
 ```bash
-brew install ffmpeg uv
-```
-
-Verify ffmpeg landed at `/opt/homebrew/bin/ffmpeg`:
-
-```bash
-which ffmpeg
-# /opt/homebrew/bin/ffmpeg
+brew install uv
 ```
 
 ---
@@ -99,40 +92,43 @@ open ~/Library/LaunchAgents/com.voicemode.whisper.plist
 
 ## Part 3: Universal dictation — hotkey daemon
 
-Hold `cmd` for 1 second anywhere (browser, Slack, editor, terminal), speak, release — your words are typed into the active window.
+Hold `cmd` anywhere (browser, Slack, editor, terminal), speak, release — your words are typed into the active window.
 
 ### How it works
 
-`scripts/voicemode_hotkey.py` listens globally for `cmd` hold, records via ffmpeg using a hardcoded mic device (so your headphones stay as system default for calls), sends the WAV to Whisper, then pastes the transcript.
+`scripts/voicemode_hotkey.py` listens globally for `cmd` hold using a raw CGEventTap, records via `sounddevice` (pure Python) using a hardcoded mic device index so your headphones stay as system default for calls, sends the WAV to Whisper, then pastes the transcript.
+
+> **Why sounddevice, not ffmpeg?** When launchd spawns the daemon, ffmpeg runs as a subprocess without inheriting macOS TCC microphone permission. sounddevice records directly in Python, so the mic permission granted to the Python binary applies. Using ffmpeg here results in silent recordings.
+
+> **Why CGEventTap, not pynput?** On macOS, pynput fires duplicate events for modifier keys (pressing left-cmd generates both `Key.cmd_l` and `Key.cmd`), causing double transcription. CGEventTap fires exactly once per physical key event.
 
 ### Install dependencies
 
 ```bash
-pip install pynput httpx
+pip install sounddevice numpy httpx pyobjc-framework-Quartz
 ```
 
 ### Configure the input device
 
-The daemon hardcodes a specific avfoundation device so it always uses the built-in mic — your earphones/headphones remain the system default for everything else.
+The daemon hardcodes a specific sounddevice input index so it always uses the built-in mic — your earphones/headphones remain the system default for everything else.
 
 List your devices:
 
-```bash
-ffmpeg -f avfoundation -list_devices true -i "" 2>&1 | grep -A20 "AVFoundation audio"
+```python
+python3 -c "import sounddevice as sd; [print(i, d['name']) for i, d in enumerate(sd.query_devices()) if d['max_input_channels'] > 0]"
 ```
 
 Example output:
 ```
-[0] Aggregate Device
-[1] JBL Endurance Race 2
-[2] MacBook Pro Microphone
-[3] ZoomAudioDevice
+0 JBL Endurance Race 2
+2 MacBook Pro Microphone
+4 ZoomAudioDevice
 ```
 
 Set `AUDIO_DEVICE_INDEX` near the top of `scripts/voicemode_hotkey.py` to match your built-in mic:
 
 ```python
-AUDIO_DEVICE_INDEX = "2"  # MacBook Pro Microphone
+AUDIO_DEVICE_INDEX = 2  # MacBook Pro Microphone
 ```
 
 Do **not** change your system default input device — that would affect calls, video meetings, etc.
@@ -181,7 +177,7 @@ Watch the log while you test:
 tail -f ~/.claude/plugins/claude-stt/voicemode_hotkey.log
 ```
 
-Hold `cmd` for 1 second, speak, release. You should see:
+Hold `cmd`, speak, release. You should see:
 
 ```
 🎤 Recording started...
@@ -280,13 +276,23 @@ tail -5 ~/.claude/plugins/claude-stt/voicemode_hotkey.log
 
 ## Troubleshooting
 
-### "FileNotFoundError: ffmpeg" in hotkey log
+### Blank audio / `[BLANK_AUDIO]` every time
 
-The daemon launched without Homebrew in PATH (common with launchd). The script must use the full path `/opt/homebrew/bin/ffmpeg`, not just `ffmpeg`. Check `scripts/voicemode_hotkey.py` line ~75.
+The most common cause when running via launchd: the Python process does not have microphone TCC permission.
+
+Run the script **directly from Terminal** once to trigger the macOS mic permission prompt:
+
+```bash
+python3 ~/.claude/plugins/claude-stt/voicemode_hotkey.py
+```
+
+Grant access when prompted. Then confirm it appears in **System Settings → Privacy & Security → Microphone**. After granting, restart the daemon via launchd.
+
+> Do not rely on Terminal.app's mic permission — launchd spawns Python directly, so only the Python binary's own TCC grant applies.
 
 ### "Audio too short, skipping." every time
 
-ffmpeg crashed silently — almost always the same PATH issue above.
+The recording is ending before enough audio is captured. Try holding `cmd` longer before speaking, or lower `HOLD_DELAY` in the script.
 
 ### Whisper returns `{"error":"FFmpeg conversion failed."}`
 
@@ -311,8 +317,8 @@ Accessibility permission missing. **System Settings → Privacy & Security → A
 
 Device indices can shift when you plug/unplug USB or Bluetooth audio. Re-list and update `AUDIO_DEVICE_INDEX`:
 
-```bash
-ffmpeg -f avfoundation -list_devices true -i "" 2>&1 | grep -A20 "AVFoundation audio"
+```python
+python3 -c "import sounddevice as sd; [print(i, d['name']) for i, d in enumerate(sd.query_devices()) if d['max_input_channels'] > 0]"
 ```
 
 ### Kokoro not speaking / Claude voice silent
